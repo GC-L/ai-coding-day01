@@ -4,29 +4,38 @@ from getpass import getpass
 import paramiko
 
 
+def read_until_prompt(chan, timeout=10):
+    """一直读，直到结尾出现提示符 # 或 >；超过 timeout 秒就报错。"""
+    result = ""
+    start = time.time()
+    while True:
+        if chan.recv_ready():
+            result += chan.recv(65535).decode()
+
+        if result.rstrip().endswith(("#", ">")):
+            return result                          # 看到提示符：读完了
+
+        if time.time() - start > timeout:
+            raise TimeoutError("超时了，没等到提示符")
+
+        time.sleep(0.1)                            # 稍等一下再看
+
+
 def qytang_multicmd(ip, username, password, cmd_list, wait_time=2, verbose=True):
     """在同一个SSH交互终端依次执行cmd_list，返回全部回显文本。"""
-    # 1. 登录设备
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(ip, username=username, password=password,
                 look_for_keys=False, allow_agent=False)
 
     try:
-        # 2. 打开交互终端，读掉欢迎信息
         chan = ssh.invoke_shell()
-        chan.settimeout(10)          # recv 最多等 10 秒，防止死等
-        time.sleep(1)
-        chan.recv(65535)
+        read_until_prompt(chan)                    # 读掉欢迎信息
 
-        # 3. 逐条执行：发命令 → 等待 → 把能读的都读完
         output = ""
         for cmd in cmd_list:
             chan.sendall((cmd + "\n").encode())
-            time.sleep(wait_time)
-            result = ""
-            while chan.recv_ready():     # 快递柜里还有东西，就继续取
-                result += chan.recv(65535).decode()
+            result = read_until_prompt(chan)
             output += result
             if verbose:
                 print(result, end="")
@@ -34,7 +43,6 @@ def qytang_multicmd(ip, username, password, cmd_list, wait_time=2, verbose=True)
             print()
         return output
     finally:
-        # 4. 不管中间有没有出错，最后都断开连接
         ssh.close()
 
 
